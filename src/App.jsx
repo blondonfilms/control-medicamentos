@@ -29,8 +29,12 @@ import {
   Database,
   Calendar,
   Clock,
+  RotateCcw,
+  Search,
+  ExternalLink,
+  DollarSign,
   ChevronRight,
-  RotateCcw
+  Lock
 } from 'lucide-react';
 
 /**
@@ -42,10 +46,11 @@ const firebaseConfig = {
   projectId: "control-medicamentos-9c9f9",      
   storageBucket: "control-medicamentos-9c9f9.firebasestorage.app",  
   messagingSenderId: "805972069626", 
-  appId: "1:805972069626:web:287622c95615b852070d43"           
+  appId: "1:805972069626:web:287622c95615b852070d43"             
 };
 
 const appId = "control-medicamentos-9c9f9"; 
+const apiKey = ""; // La clave de API se proporciona en el entorno de ejecución
 const isConfigReady = firebaseConfig && firebaseConfig.apiKey !== "";
 
 let app, auth, db;
@@ -73,6 +78,9 @@ const App = () => {
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [editingMed, setEditingMed] = useState(null);
   const [deletingMed, setDeletingMed] = useState(null); 
+  const [searchingMed, setSearchingMed] = useState(null);
+  const [searchResult, setSearchResult] = useState(null);
+  const [isSearching, setIsSearching] = useState(false);
   const [inputVal, setInputVal] = useState("");
   const [currentDate] = useState(new Date());
   const [editPurchaseDate, setEditPurchaseDate] = useState(new Date().toISOString().split('T')[0]);
@@ -147,7 +155,11 @@ const App = () => {
       }
       setLoading(false);
     }, (error) => {
-      setDbStatus('error');
+      if (error.code === 'permission-denied') {
+        setDbStatus('permission-error');
+      } else {
+        setDbStatus('error');
+      }
       setLoading(false);
     });
     return () => unsubscribe();
@@ -171,6 +183,52 @@ const App = () => {
       diasTranscurridos: dias,
       dosisDiaria: dosisDia
     };
+  };
+
+  const buscarMejorPrecio = async (medNombre) => {
+    setIsSearching(true);
+    setSearchResult(null);
+    setSearchingMed(medNombre);
+
+    const userQuery = `Busca y compara el precio actual del medicamento "${medNombre}" en las 4 farmacias principales de Zapopan, Jalisco: Farmacias Guadalajara, Farmacias del Ahorro, Farmacias Benavides y Farmacias Similares. Dime específicamente quién tiene el mejor precio hoy y si hay ofertas vigentes. Responde de forma muy resumida y clara para un usuario en México.`;
+    
+    const systemPrompt = "Eres un asistente experto en compras farmacéuticas en Zapopan, Jalisco. Tu objetivo es encontrar el precio más bajo para el usuario comparando las farmacias líderes. Presenta la información en una lista clara con el nombre de la farmacia y el precio estimado. Al final, da una recomendación directa sobre dónde comprar.";
+
+    const fetchContent = async (retryCount = 0) => {
+      try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: userQuery }] }],
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            tools: [{ "google_search": {} }]
+          })
+        });
+
+        if (!response.ok) throw new Error('API Error');
+        
+        const result = await response.json();
+        const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+        const sources = result.candidates?.[0]?.groundingMetadata?.groundingAttributions?.map(a => ({
+          uri: a.web?.uri,
+          title: a.web?.title
+        })) || [];
+
+        setSearchResult({ text, sources });
+        setIsSearching(false);
+      } catch (error) {
+        if (retryCount < 5) {
+          const delay = Math.pow(2, retryCount) * 1000;
+          setTimeout(() => fetchContent(retryCount + 1), delay);
+        } else {
+          setSearchResult({ text: "Lo siento, no pude obtener los precios en este momento. Por favor, intenta de nuevo.", sources: [] });
+          setIsSearching(false);
+        }
+      }
+    };
+
+    fetchContent();
   };
 
   const guardarCambios = async (nuevosMeds, logMsg) => {
@@ -211,7 +269,7 @@ const App = () => {
     e.preventDefault();
     const f = e.target;
     let nuevos = [...meds];
-    const rawDateValue = f.fechaReferencia.value; // Nueva fecha de referencia
+    const rawDateValue = f.fechaReferencia.value;
     const fSyncFinal = rawDateValue ? new Date(rawDateValue + "T12:00:00").toISOString() : new Date().toISOString();
 
     const data = {
@@ -233,6 +291,22 @@ const App = () => {
     setEditingMed(null);
     setIsAddingNew(false);
   };
+
+  if (dbStatus === 'permission-error') return (
+    <div className="min-h-screen bg-slate-100 p-6 flex items-center justify-center w-full">
+      <div className="bg-white p-12 rounded-[3.5rem] shadow-2xl max-w-2xl w-full text-center">
+        <Lock className="text-red-500 mb-6 mx-auto" size={60} />
+        <h2 className="text-4xl font-black text-slate-800 m-0 tracking-tight leading-none">Acceso Denegado</h2>
+        <p className="text-slate-500 mt-6 text-lg leading-relaxed">Firebase no permite guardar datos. Para solucionarlo:</p>
+        <div className="bg-slate-50 p-6 rounded-3xl mt-6 text-left border border-solid border-slate-200">
+          <p className="text-sm m-0 font-bold text-slate-700">1. Ve a Firestore Database {'>'} pestaña <b>Rules</b>.</p>
+          <p className="text-sm m-0 font-bold text-slate-700 mt-2">2. Pega: <code className="bg-white px-2 py-0.5 rounded border">allow read, write: if true;</code></p>
+          <p className="text-sm m-0 font-bold text-slate-700 mt-2">3. Haz clic en el botón azul <b>PUBLISH</b> arriba.</p>
+        </div>
+        <button onClick={() => window.location.reload()} className="w-full mt-10 py-5 bg-indigo-600 text-white rounded-2xl font-black border-none cursor-pointer hover:bg-indigo-700 text-xl shadow-xl">Reintentar Conexión</button>
+      </div>
+    </div>
+  );
 
   if (loading) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-indigo-600" size={48}/></div>;
 
@@ -276,7 +350,7 @@ const App = () => {
 
         {view === 'inventory' ? (
           <div className="bg-white rounded-[2.5rem] shadow-xl border border-solid border-slate-200 overflow-hidden w-full mt-2">
-            <table className="w-full text-left border-collapse">
+            <table className="w-full text-left border-collapse min-w-[600px]">
               <thead className="bg-slate-50 text-slate-400 text-[10px] uppercase tracking-widest font-black">
                 <tr>
                   <th className="px-8 py-5">Medicamento</th>
@@ -314,6 +388,15 @@ const App = () => {
                       </td>
                       <td className="px-8 py-6">
                         <div className="flex justify-center items-center gap-3">
+                          {s.estado !== 'ok' && (
+                            <button 
+                              onClick={() => buscarMejorPrecio(med.nombre)}
+                              className="p-2.5 bg-indigo-600 text-white rounded-xl hover:scale-110 border-none cursor-pointer transition-transform shadow-md"
+                              title="Buscar mejor precio"
+                            >
+                              <Search size={22}/>
+                            </button>
+                          )}
                           {addingStock === index ? (
                             <div className="bg-indigo-50 p-4 rounded-2xl border border-solid border-indigo-100 flex flex-col gap-2 animate-in zoom-in-95 duration-200">
                               <div className="flex gap-2">
@@ -346,15 +429,17 @@ const App = () => {
              </div>
              <div className="grid md:grid-cols-2 gap-6 w-full">
                 {meds.filter(m => calcularEstado(m).compraNecesaria > 0).map((med, i) => (
-                  <div key={i} className="flex justify-between items-center p-8 bg-indigo-50/40 rounded-[2.5rem] border border-solid border-indigo-100 text-left transition-all hover:shadow-lg">
-                    <div>
+                  <div key={i} className="flex flex-col p-8 bg-indigo-50/40 rounded-[2.5rem] border border-solid border-indigo-100 text-left transition-all hover:shadow-lg gap-4">
+                    <div className="flex justify-between items-start">
                        <span className="font-black text-slate-800 text-2xl leading-none block mb-2">{med.nombre}</span>
-                       <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Dosis: {med.dosisMes}u / mes</span>
-                    </div>
-                    <div className="text-right">
                        <span className="text-5xl font-black text-indigo-600 leading-none">+{calcularEstado(med).compraNecesaria}</span>
-                       <span className="text-[10px] block text-indigo-400 font-black uppercase mt-1 tracking-widest text-center">unidades</span>
                     </div>
+                    <button 
+                      onClick={() => buscarMejorPrecio(med.nombre)}
+                      className="flex items-center justify-center gap-2 w-full py-3 bg-indigo-600 text-white rounded-2xl font-black text-sm border-none cursor-pointer active:scale-95 transition-all shadow-md"
+                    >
+                      <Search size={18}/> Buscar mejor precio hoy
+                    </button>
                   </div>
                 ))}
              </div>
@@ -362,7 +447,67 @@ const App = () => {
         )}
       </div>
 
-      {/* Modal: Edición con Retroactividad */}
+      {/* Modal: Comparador de Precios */}
+      {searchingMed && (
+        <div className="fixed inset-0 bg-indigo-950/80 backdrop-blur-md flex items-center justify-center p-6 z-[60]">
+          <div className="bg-white p-8 md:p-10 rounded-[3rem] shadow-2xl max-w-2xl w-full text-left border-none box-border animate-in zoom-in-95 duration-200 overflow-y-auto max-h-[90vh]">
+            <div className="flex justify-between items-start mb-6">
+              <div className="flex items-center gap-3">
+                <DollarSign className="text-emerald-500" size={32}/>
+                <h3 className="m-0 text-2xl font-black text-slate-800 tracking-tighter">Comparador de Precios</h3>
+              </div>
+              <button onClick={() => setSearchingMed(null)} className="p-2 text-slate-300 hover:text-slate-500 bg-transparent border-none cursor-pointer">
+                <X size={28}/>
+              </button>
+            </div>
+            
+            <p className="text-slate-500 font-bold mb-6 flex items-center gap-2">
+              Buscando para: <span className="text-indigo-600 uppercase">{searchingMed}</span>
+            </p>
+
+            {isSearching ? (
+              <div className="py-20 flex flex-col items-center justify-center gap-6">
+                <Loader2 className="animate-spin text-indigo-600" size={60}/>
+                <p className="text-slate-400 font-black uppercase tracking-widest text-xs">Consultando farmacias en Zapopan...</p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="bg-slate-50 p-6 rounded-3xl border border-solid border-slate-100 text-slate-700 leading-relaxed text-sm whitespace-pre-wrap">
+                  {searchResult?.text}
+                </div>
+                
+                {searchResult?.sources?.length > 0 && (
+                  <div className="space-y-3">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Fuentes verificadas:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {searchResult.sources.map((src, i) => (
+                        <a 
+                          key={i} 
+                          href={src.uri} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-solid border-slate-200 rounded-full text-[10px] font-bold text-slate-500 hover:bg-slate-100 transition-colors no-underline"
+                        >
+                          <ExternalLink size={12}/> {src.title || 'Ver precio'}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                <button 
+                  onClick={() => setSearchingMed(null)}
+                  className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black text-lg shadow-xl active:scale-95 transition-all border-none cursor-pointer mt-4"
+                >
+                  Entendido
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Edición */}
       {(isAddingNew || editingMed !== null) && (
         <div className="fixed inset-0 bg-indigo-950/80 backdrop-blur-md flex items-center justify-center p-6 z-50">
           <form onSubmit={handleForm} className="bg-white p-10 rounded-[4rem] shadow-2xl max-w-sm w-full text-left border-none box-border animate-in zoom-in-95 duration-200 overflow-y-auto max-h-[90vh]">
@@ -370,16 +515,16 @@ const App = () => {
             <div className="flex flex-col gap-5">
               <div>
                 <label className="text-[10px] font-black text-indigo-400 uppercase mb-2 block tracking-widest px-1">Nombre</label>
-                <input name="nombre" defaultValue={isAddingNew ? "" : meds[editingMed].nombre} className="w-full p-4 border border-solid border-slate-100 bg-slate-50 rounded-2xl font-bold outline-none" required />
+                <input name="nombre" defaultValue={isAddingNew ? "" : meds[editingMed].nombre} className="w-full p-4 border border-solid border-slate-100 bg-slate-50 rounded-2xl font-bold outline-none shadow-inner" required />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-[10px] font-black text-indigo-400 uppercase mb-2 block tracking-widest px-1">U. por Mes</label>
-                  <input name="dosisMes" type="number" step="0.5" defaultValue={isAddingNew ? 30 : meds[editingMed].dosisMes} className="w-full p-4 border border-solid border-slate-100 bg-slate-50 rounded-2xl font-bold outline-none" required />
+                  <input name="dosisMes" type="number" step="0.5" defaultValue={isAddingNew ? 30 : meds[editingMed].dosisMes} className="w-full p-4 border border-solid border-slate-100 bg-slate-50 rounded-2xl font-bold outline-none shadow-inner" required />
                 </div>
                 <div>
                   <label className="text-[10px] font-black text-indigo-400 uppercase mb-2 block tracking-widest px-1">Días Aviso</label>
-                  <input name="leadTime" type="number" defaultValue={isAddingNew ? 7 : meds[editingMed].leadTime} className="p-4 w-full border border-solid border-slate-100 bg-slate-50 rounded-2xl font-bold outline-none" required />
+                  <input name="leadTime" type="number" defaultValue={isAddingNew ? 7 : meds[editingMed].leadTime} className="p-4 w-full border border-solid border-slate-100 bg-slate-50 rounded-2xl font-bold outline-none shadow-inner" required />
                 </div>
               </div>
               
@@ -388,7 +533,6 @@ const App = () => {
                    <RotateCcw size={16}/>
                    <label className="text-[10px] font-black uppercase tracking-widest">Ajuste de Tiempo</label>
                 </div>
-                <p className="text-[9px] text-indigo-400 mb-4 leading-tight">¿Cuándo fue la última vez que este inventario estuvo correcto? El sistema restará el consumo desde ese día hasta hoy.</p>
                 <input name="fechaReferencia" type="date" defaultValue={isAddingNew ? new Date().toISOString().split('T')[0] : meds[editingMed].fechaSync.split('T')[0]} className="w-full p-3 border-none bg-white rounded-xl font-black text-indigo-800 text-center shadow-sm" />
               </div>
 
@@ -411,7 +555,7 @@ const App = () => {
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-6 z-[60]">
            <div className="bg-white p-10 rounded-[3rem] shadow-2xl max-w-xs w-full text-center border-none animate-in zoom-in-95 duration-200">
               <AlertTriangle size={48} className="text-red-500 mx-auto mb-6"/>
-              <h3 className="text-2xl font-black text-slate-800 m-0">¿Eliminar?</h3>
+              <h3 className="text-2xl font-black text-slate-800 m-0 leading-none">¿Eliminar?</h3>
               <p className="text-slate-500 text-sm mt-4 font-bold uppercase tracking-widest">{meds[deletingMed]?.nombre}</p>
               <div className="flex gap-3 mt-8">
                  <button onClick={confirmarEliminar} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-black text-sm shadow-lg border-none cursor-pointer">Eliminar</button>
