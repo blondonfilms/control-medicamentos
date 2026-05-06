@@ -27,21 +27,23 @@ import {
   Wifi,
   WifiOff,
   Database,
-  Lock
+  Lock,
+  Search,
+  Info,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 
 /**
  * ⚠️ CONFIGURACIÓN DE FIREBASE ⚠️
- * Pega tus llaves aquí. Asegúrate de que no queden comas ni 
- * comillas extra dentro de los valores.
  */
 const firebaseConfig = {
-  apiKey: "AIzaSyAiVjwE4HzqwT5OKLP-aiJCNEm5mGkxUGM",
-  authDomain: "control-medicamentos-9c9f9.firebaseapp.com",
-  projectId: "control-medicamentos-9c9f9",
-  storageBucket: "control-medicamentos-9c9f9.firebasestorage.app",
-  messagingSenderId: "805972069626",
-  appId: "1:805972069626:web:287622c95615b852070d43",           
+  apiKey: "",         
+  authDomain: "",     
+  projectId: "",      
+  storageBucket: "",  
+  messagingSenderId: "", 
+  appId: ""           
 };
 
 const appId = "control-medicamentos-9c9f9"; 
@@ -65,7 +67,9 @@ const App = () => {
   const [loading, setLoading] = useState(true);
   const [dbStatus, setDbStatus] = useState('connecting');
   const [meds, setMeds] = useState([]);
+  const [logs, setLogs] = useState([]); // Nuevo: Para debug
   const [view, setView] = useState('inventory');
+  const [showLogs, setShowLogs] = useState(false);
   const [addingStock, setAddingStock] = useState(null); 
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [editingMed, setEditingMed] = useState(null);
@@ -75,7 +79,6 @@ const App = () => {
   const [currentDate] = useState(new Date());
   const [editPurchaseDate, setEditPurchaseDate] = useState(new Date().toISOString().split('T')[0]);
 
-  // Estilos de centrado y scroll corregidos
   useEffect(() => {
     if (!document.getElementById('tailwind-cdn')) {
       const script = document.createElement('script');
@@ -97,7 +100,7 @@ const App = () => {
         flex-direction: column !important;
         align-items: center !important; 
         justify-content: flex-start !important;
-        font-family: sans-serif !important;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
       }
       .sticky-header {
         position: sticky;
@@ -114,6 +117,11 @@ const App = () => {
         max-width: 1100px;
         padding: 0 1rem 4rem 1rem;
       }
+      @keyframes slideIn {
+        from { transform: translateY(-10px); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+      }
+      .animate-slide { animation: slideIn 0.3s ease-out; }
     `;
     document.head.appendChild(style);
   }, []);
@@ -122,17 +130,15 @@ const App = () => {
     if (!isConfigReady) return;
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
       if (!u) {
-        try { await signInAnonymously(auth); } catch (e) { console.error(e); }
+        try { await signInAnonymously(auth); } catch (e) { console.error("Auth error:", e); }
       } else { setUser(u); }
     });
     return () => unsubscribe();
   }, []);
 
-  // CARGA DE DATOS: Ruta corregida a 6 segmentos (par)
   useEffect(() => {
     if (!user || !db) return;
     
-    // Ruta: artifacts (1) / appId (2) / public (3) / data (4) / inventory (5) / main (6)
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'inventory', 'main');
     
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
@@ -140,7 +146,10 @@ const App = () => {
       if (docSnap.exists()) {
         const data = docSnap.data();
         setMeds(data.meds || []);
+        setLogs(data.logs || []); // Cargar logs
         if (data.fechaCorte) setFechaCorte(new Date(data.fechaCorte));
+      } else {
+        setMeds([]); 
       }
       setLoading(false);
     }, (error) => {
@@ -152,8 +161,10 @@ const App = () => {
   }, [user]);
 
   const calcularEstado = (med) => {
-    const diffTime = Math.abs(currentDate - fechaCorte);
-    const diasTranscurridos = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+    // BUG FIX: Evitar que fechas futuras reseteen el cálculo de forma extraña
+    const diffTime = currentDate - fechaCorte;
+    const diasTranscurridos = Math.max(0, Math.floor(diffTime / (1000 * 60 * 60 * 24)));
+    
     const dosisDiaria = (med.dosisMes || 0) / 30;
     const consumoAcumulado = diasTranscurridos * dosisDiaria;
     const stockActual = Math.max(0, (med.stockCorte || 0) - consumoAcumulado);
@@ -166,28 +177,46 @@ const App = () => {
       diasRestantes: Math.floor(diasRestantes),
       compraNecesaria,
       estado: diasRestantes <= 2 ? 'critico' : diasRestantes <= leadTime ? 'bajo' : 'ok',
-      dosisDiaria
+      dosisDiaria,
+      diasTranscurridos
     };
   };
 
-  const guardarEnNube = async (nuevosMeds) => {
+  const addLog = (action) => {
+    const newLog = {
+      id: Date.now(),
+      timestamp: new Date().toISOString(),
+      action: action,
+      user: "Usuario Compartido"
+    };
+    return [newLog, ...logs].slice(0, 10); // Mantener solo los últimos 10
+  };
+
+  const guardarEnNube = async (nuevosMeds, actionDescription) => {
     if (!user || !db) return;
     const hoy = new Date().toISOString();
+    const nuevosLogs = addLog(actionDescription);
     try {
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'inventory', 'main');
-      await setDoc(docRef, { meds: nuevosMeds, fechaCorte: hoy });
+      await setDoc(docRef, { 
+        meds: nuevosMeds, 
+        fechaCorte: hoy,
+        logs: nuevosLogs
+      });
     } catch (error) {
       console.error("Save error:", error);
+      alert("Error al guardar en la nube.");
     }
   };
 
   const registrarCompra = async (index) => {
     const cantidad = parseInt(inputVal);
     if (isNaN(cantidad) || cantidad <= 0) return;
-    const stats = calcularEstado(meds[index]);
+    const med = meds[index];
+    const stats = calcularEstado(med);
     const fechaCompraObj = new Date(editPurchaseDate + "T12:00:00");
-    const diffTimeDesdeCompra = Math.abs(currentDate - fechaCompraObj);
-    const diasDesdeCompra = Math.floor(diffTimeDesdeCompra / (1000 * 60 * 60 * 24));
+    const diffTimeDesdeCompra = currentDate - fechaCompraObj;
+    const diasDesdeCompra = Math.max(0, Math.floor(diffTimeDesdeCompra / (1000 * 60 * 60 * 24)));
     const consumoYaSucedido = Math.max(0, diasDesdeCompra * stats.dosisDiaria);
     const nuevoStockHoy = stats.stockActual + (cantidad - consumoYaSucedido);
 
@@ -195,14 +224,16 @@ const App = () => {
       ...m,
       stockCorte: idx === index ? nuevoStockHoy : calcularEstado(m).stockActual
     }));
-    await guardarEnNube(nuevosMeds);
+    
+    await guardarEnNube(nuevosMeds, `Surtido: ${cantidad}u de ${med.nombre}`);
     setAddingStock(null);
     setInputVal("");
   };
 
   const eliminarMedicamento = async () => {
+    const medName = meds[deletingMed]?.nombre;
     const nuevosMeds = meds.filter((_, idx) => idx !== deletingMed);
-    await guardarEnNube(nuevosMeds);
+    await guardarEnNube(nuevosMeds, `Eliminado: ${medName}`);
     setDeletingMed(null);
   };
 
@@ -217,13 +248,16 @@ const App = () => {
     };
 
     if (isAddingNew) {
-      nuevosMeds.push({ ...medData, stockCorte: parseFloat(form.stockManual.value || 0) });
+      const stock = parseFloat(form.stockManual.value || 0);
+      nuevosMeds.push({ ...medData, stockCorte: stock });
+      await guardarEnNube(nuevosMeds, `Agregado: ${medData.nombre} con ${stock}u`);
     } else {
+      const oldName = meds[editingMed].nombre;
       const stockAju = form.stockManual.value !== "" ? parseFloat(form.stockManual.value) : calcularEstado(meds[editingMed]).stockActual;
       nuevosMeds[editingMed] = { ...medData, stockCorte: stockAju };
+      await guardarEnNube(nuevosMeds, `Editado: ${oldName} (Ajuste stock: ${stockAju}u)`);
     }
 
-    await guardarEnNube(nuevosMeds);
     setEditingMed(null);
     setIsAddingNew(false);
   };
@@ -240,20 +274,52 @@ const App = () => {
             <h1 className="text-2xl md:text-3xl font-black m-0 flex items-center gap-3">
               <Pill className="text-indigo-400" size={28} /> Control Tere Valencia
             </h1>
-            <p className="text-indigo-200 text-xs m-0 mt-2 opacity-80 flex items-center justify-center md:justify-start gap-2 font-medium">
-               <History size={14}/> Sincronizado: {fechaCorte.toLocaleDateString()} 
+            <div className="flex flex-wrap items-center justify-center md:justify-start gap-4 mt-2">
+               <p className="text-indigo-200 text-xs m-0 opacity-80 flex items-center gap-2 font-medium">
+                  <History size={14}/> {fechaCorte.toLocaleDateString()} {fechaCorte.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+               </p>
+               <button 
+                onClick={() => setShowLogs(!showLogs)}
+                className="text-[10px] bg-indigo-800 hover:bg-indigo-700 px-2 py-1 rounded flex items-center gap-1 transition-colors border-none cursor-pointer text-white"
+               >
+                <Info size={12}/> {showLogs ? 'Ocultar Historial' : 'Ver Historial'}
+               </button>
                {dbStatus === 'online' ? <Wifi size={14} className="text-emerald-400"/> : <WifiOff size={14} className="text-red-400"/>}
-            </p>
+            </div>
           </div>
           <div className="flex gap-2 bg-indigo-950/40 p-2 rounded-2xl">
-            <button onClick={() => setView('inventory')} className={`px-4 py-2 rounded-xl font-black text-sm transition-all ${view === 'inventory' ? 'bg-white text-indigo-900 shadow-lg' : 'bg-transparent text-indigo-200'}`}>Inventario</button>
-            <button onClick={() => setView('shopping')} className={`px-4 py-2 rounded-xl font-black text-sm transition-all ${view === 'shopping' ? 'bg-white text-indigo-900 shadow-lg' : 'bg-transparent text-indigo-200'}`}>Compras</button>
-            <button onClick={() => setIsAddingNew(true)} className="bg-emerald-500 text-white px-4 py-2 rounded-xl font-black shadow-xl ml-2 active:scale-95"><Plus size={20}/></button>
+            <button onClick={() => setView('inventory')} className={`px-4 py-2 rounded-xl font-black text-sm transition-all border-none cursor-pointer ${view === 'inventory' ? 'bg-white text-indigo-900 shadow-lg' : 'bg-transparent text-indigo-200'}`}>Inventario</button>
+            <button onClick={() => setView('shopping')} className={`px-4 py-2 rounded-xl font-black text-sm transition-all border-none cursor-pointer ${view === 'shopping' ? 'bg-white text-indigo-900 shadow-lg' : 'bg-transparent text-indigo-200'}`}>Compras</button>
+            <button onClick={() => setIsAddingNew(true)} className="bg-emerald-500 text-white px-4 py-2 rounded-xl font-black shadow-xl ml-2 active:scale-95 border-none cursor-pointer"><Plus size={20}/></button>
           </div>
         </div>
       </div>
 
       <div className="main-content">
+        {/* Panel de Historial (Debug) */}
+        {showLogs && (
+          <div className="w-full bg-slate-800 text-slate-300 p-6 rounded-[2rem] mb-6 animate-slide shadow-inner text-sm border-none">
+            <h4 className="m-0 mb-4 text-white flex items-center gap-2 uppercase tracking-widest text-[10px] font-black">
+              <History size={14}/> Últimos 10 cambios en la nube:
+            </h4>
+            <div className="space-y-3">
+              {logs.length > 0 ? logs.map(log => (
+                <div key={log.id} className="flex justify-between border-b border-slate-700 pb-2">
+                  <span>{log.action}</span>
+                  <span className="text-[10px] opacity-50 font-mono">
+                    {new Date(log.timestamp).toLocaleTimeString()}
+                  </span>
+                </div>
+              )) : <p className="opacity-50 italic">No hay historial reciente.</p>}
+            </div>
+            <div className="mt-6 pt-4 border-t border-slate-700 text-[10px]">
+              <p className="m-0 font-bold text-amber-400">DEBUG INFO:</p>
+              <p className="m-0">Timestamp Sincronización: {fechaCorte.toISOString()}</p>
+              <p className="m-0">Días transcurridos calculados hoy: {Math.floor((currentDate - fechaCorte) / (1000*60*60*24))}</p>
+            </div>
+          </div>
+        )}
+
         {view === 'inventory' ? (
           <div className="bg-white rounded-[2.5rem] shadow-xl border border-solid border-slate-200 overflow-hidden w-full mt-4">
             <div className="overflow-x-auto">
@@ -261,8 +327,8 @@ const App = () => {
                 <thead className="bg-slate-50 text-slate-400 text-[10px] uppercase tracking-widest font-black">
                   <tr>
                     <th className="px-8 py-5">Medicamento</th>
-                    <th className="px-8 py-5 text-center">Stock</th>
-                    <th className="px-8 py-5 text-center">Días</th>
+                    <th className="px-8 py-5 text-center">Stock Estimado</th>
+                    <th className="px-8 py-5 text-center">Estatus</th>
                     <th className="px-8 py-5 text-center">Acciones</th>
                   </tr>
                 </thead>
@@ -277,15 +343,19 @@ const App = () => {
                             <p className="font-bold text-slate-800 m-0 text-base leading-tight">{med.nombre}</p>
                           </div>
                         </td>
-                        <td className="px-8 py-6 text-center font-mono font-black text-xl text-slate-700">{stats.stockActual}</td>
                         <td className="px-8 py-6 text-center">
-                          <span className={`px-3 py-1 rounded-lg text-[10px] font-black border border-solid ${
+                          <p className="font-mono font-black text-xl text-slate-700 m-0">{stats.stockActual}</p>
+                          <p className="text-[9px] text-slate-400 m-0 uppercase font-bold tracking-tighter">unidades</p>
+                        </td>
+                        <td className="px-8 py-6 text-center">
+                          <div className={`inline-flex flex-col items-center px-4 py-2 rounded-xl border border-solid ${
                             stats.estado === 'critico' ? 'bg-red-50 text-red-600 border-red-100' : 
                             stats.estado === 'bajo' ? 'bg-amber-50 text-amber-600 border-amber-100' : 
                             'bg-emerald-50 text-emerald-600 border-emerald-100'
                           }`}>
-                            {stats.diasRestantes}
-                          </span>
+                            <span className="text-xl font-black leading-none">{stats.diasRestantes}</span>
+                            <span className="text-[9px] font-black uppercase tracking-widest mt-1">Días</span>
+                          </div>
                         </td>
                         <td className="px-8 py-6">
                           <div className="flex justify-center items-center gap-2">
@@ -294,15 +364,15 @@ const App = () => {
                                 <input type="number" className="p-2 rounded-lg border border-solid border-indigo-200 text-sm font-bold outline-none" value={inputVal} onChange={e => setInputVal(e.target.value)} placeholder="Cant." />
                                 <input type="date" className="p-2 rounded-lg border border-solid border-indigo-200 text-[10px] outline-none" value={editPurchaseDate} onChange={e => setEditPurchaseDate(e.target.value)} />
                                 <div className="flex gap-1">
-                                  <button onClick={() => registrarCompra(index)} className="flex-1 bg-indigo-600 text-white py-1.5 rounded-lg text-[10px] font-black">OK</button>
-                                  <button onClick={() => setAddingStock(null)} className="p-1.5 bg-slate-300 text-white rounded-lg"><X size={12}/></button>
+                                  <button onClick={() => registrarCompra(index)} className="flex-1 bg-indigo-600 text-white py-1.5 rounded-lg text-[10px] font-black border-none cursor-pointer">OK</button>
+                                  <button onClick={() => setAddingStock(null)} className="p-1.5 bg-slate-300 text-white rounded-lg border-none cursor-pointer"><X size={12}/></button>
                                 </div>
                               </div>
                             ) : (
                               <>
-                                <button onClick={() => setAddingStock(index)} className="p-2 bg-indigo-50 text-indigo-600 rounded-xl hover:scale-110 transition-transform"><PlusCircle size={22}/></button>
-                                <button onClick={() => setEditingMed(index)} className="p-2 bg-slate-100 text-slate-400 rounded-xl"><Edit3 size={18}/></button>
-                                <button onClick={() => setDeletingMed(index)} className="p-2 bg-red-50 text-red-400 rounded-xl"><Trash2 size={18}/></button>
+                                <button onClick={() => setAddingStock(index)} className="p-2 bg-indigo-50 text-indigo-600 rounded-xl hover:scale-110 transition-transform border-none cursor-pointer" title="Surtir compra"><PlusCircle size={22}/></button>
+                                <button onClick={() => setEditingMed(index)} className="p-2 bg-slate-100 text-slate-400 rounded-xl border-none cursor-pointer" title="Ajustar stock o dosis"><Edit3 size={18}/></button>
+                                <button onClick={() => setDeletingMed(index)} className="p-2 bg-red-50 text-red-400 rounded-xl border-none cursor-pointer" title="Eliminar"><Trash2 size={18}/></button>
                               </>
                             )}
                           </div>
@@ -312,67 +382,82 @@ const App = () => {
                   })}
                 </tbody>
               </table>
-              {meds.length === 0 && <div className="py-20 text-center text-slate-300 font-bold uppercase tracking-widest text-xs">Inventario Vacío</div>}
+              {meds.length === 0 && <div className="py-20 text-center text-slate-300 font-bold uppercase tracking-widest text-xs">No hay medicamentos en la lista</div>}
             </div>
           </div>
         ) : (
           <div className="bg-white rounded-[3rem] shadow-xl p-10 border border-solid border-slate-200 w-full mt-4">
-             <h2 className="m-0 mb-8 flex items-center justify-center gap-3 text-indigo-900 text-2xl font-black">
-                <ShoppingCart className="text-indigo-600" size={32}/> Lista de Compra
-             </h2>
+             <div className="flex items-center justify-center gap-3 mb-8">
+                <ShoppingCart className="text-indigo-600" size={32}/>
+                <h2 className="m-0 text-indigo-900 text-2xl font-black">Lista de Compra</h2>
+             </div>
              <div className="grid md:grid-cols-2 gap-4 w-full">
                 {meds.filter(m => calcularEstado(m).compraNecesaria > 0).map((med, i) => (
                   <div key={i} className="flex justify-between items-center p-6 bg-indigo-50/40 rounded-3xl border border-solid border-indigo-100">
-                    <span className="font-black text-slate-800 text-lg leading-tight">{med.nombre}</span>
-                    <span className="text-3xl font-black text-indigo-600">+{calcularEstado(med).compraNecesaria}</span>
+                    <div className="text-left">
+                       <span className="font-black text-slate-800 text-lg leading-tight block">{med.nombre}</span>
+                       <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Sugerencia: 1 Caja / {med.dosisMes}u</span>
+                    </div>
+                    <div className="text-right">
+                       <span className="text-3xl font-black text-indigo-600 leading-none">+{calcularEstado(med).compraNecesaria}</span>
+                       <span className="text-[9px] block text-indigo-400 font-black uppercase">unidades</span>
+                    </div>
                   </div>
                 ))}
              </div>
              {meds.filter(m => calcularEstado(m).compraNecesaria > 0).length === 0 && (
                <div className="py-10 text-emerald-500 bg-emerald-50 rounded-3xl border border-dashed border-emerald-200 text-center">
                  <CheckCircle2 size={40} className="mx-auto mb-2 opacity-40" />
-                 <p className="font-black m-0">Todo surtido</p>
+                 <p className="font-black m-0">Todo el inventario está surtido</p>
                </div>
              )}
           </div>
         )}
 
-        {/* Modales */}
+        {/* Modal Único: Crear/Editar */}
         {(isAddingNew || editingMed !== null) && (
           <div className="fixed inset-0 bg-indigo-950/80 backdrop-blur-md flex items-center justify-center p-6 z-50">
             <form onSubmit={procesarFormulario} className="bg-white p-10 rounded-[3rem] shadow-2xl max-w-sm w-full text-left">
-              <h3 className="m-0 mb-8 text-2xl font-black text-slate-800">{isAddingNew ? 'Nuevo' : 'Editar'}</h3>
+              <h3 className="m-0 mb-8 text-2xl font-black text-slate-800">{isAddingNew ? 'Nuevo Medicamento' : 'Editar Datos'}</h3>
               <div className="flex flex-col gap-6">
                 <div>
                   <label className="text-[10px] font-black text-indigo-400 uppercase mb-2 block tracking-widest px-1">Nombre</label>
                   <input name="nombre" defaultValue={isAddingNew ? "" : meds[editingMed].nombre} className="w-full p-4 border border-solid border-slate-100 bg-slate-50 rounded-2xl font-bold outline-none" required />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
-                  <input name="dosisMes" type="number" step="0.5" defaultValue={isAddingNew ? 30 : meds[editingMed].dosisMes} className="p-4 border border-solid border-slate-100 bg-slate-50 rounded-2xl font-bold outline-none" placeholder="u/mes" required />
-                  <input name="leadTime" type="number" defaultValue={isAddingNew ? 7 : meds[editingMed].leadTime} className="p-4 border border-solid border-slate-100 bg-slate-50 rounded-2xl font-bold outline-none" placeholder="Aviso (d)" required />
+                  <div>
+                    <label className="text-[10px] font-black text-indigo-400 uppercase mb-2 block tracking-widest px-1">U. por Mes</label>
+                    <input name="dosisMes" type="number" step="0.5" defaultValue={isAddingNew ? 30 : meds[editingMed].dosisMes} className="w-full p-4 border border-solid border-slate-100 bg-slate-50 rounded-2xl font-bold outline-none" required />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-indigo-400 uppercase mb-2 block tracking-widest px-1">Días Aviso</label>
+                    <input name="leadTime" type="number" defaultValue={isAddingNew ? 7 : meds[editingMed].leadTime} className="p-4 w-full border border-solid border-slate-100 bg-slate-50 rounded-2xl font-bold outline-none" required />
+                  </div>
                 </div>
                 <div className="p-6 bg-amber-50 rounded-3xl border border-solid border-amber-100 text-center">
-                  <label className="text-[10px] font-black text-amber-600 m-0 mb-4 uppercase block tracking-widest">Stock Físico Hoy</label>
-                  <input name="stockManual" type="number" step="0.1" className="w-full p-4 border border-solid border-amber-200 bg-white rounded-xl font-black text-amber-700 text-center text-3xl outline-none" placeholder={isAddingNew ? "0" : `Est: ${calcularEstado(meds[editingMed]).stockActual}`} />
+                  <label className="text-[10px] font-black text-amber-600 m-0 mb-4 uppercase block tracking-widest">Stock Físico Real Hoy</label>
+                  <input name="stockManual" type="number" step="0.1" className="w-full p-4 border border-solid border-amber-200 bg-white rounded-xl font-black text-amber-700 text-center text-3xl outline-none" placeholder={isAddingNew ? "0" : `Actual: ${calcularEstado(meds[editingMed]).stockActual}`} />
+                  <p className="text-[9px] text-amber-500 mt-2 italic leading-tight">Al guardar este valor, se actualiza la "Sincronización" global a hoy.</p>
                 </div>
-                <div className="flex gap-3">
-                  <button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black text-lg shadow-xl active:scale-95 transition-all">Guardar</button>
-                  <button type="button" onClick={() => {setIsAddingNew(false); setEditingMed(null);}} className="px-6 bg-slate-100 text-slate-400 rounded-2xl font-bold">Cerrar</button>
+                <div className="flex gap-3 mt-4">
+                  <button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black text-lg shadow-xl active:scale-95 transition-all border-none cursor-pointer">Guardar</button>
+                  <button type="button" onClick={() => {setIsAddingNew(false); setEditingMed(null);}} className="px-6 bg-slate-100 text-slate-400 rounded-2xl font-bold border-none cursor-pointer">Cerrar</button>
                 </div>
               </div>
             </form>
           </div>
         )}
 
+        {/* Modal: Confirmar Borrado */}
         {deletingMed !== null && (
           <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-6 z-[60]">
-             <div className="bg-white p-8 rounded-[2.5rem] shadow-2xl max-w-xs w-full text-center">
+             <div className="bg-white p-8 rounded-[2.5rem] shadow-2xl max-w-xs w-full text-center border-none">
                 <AlertTriangle size={40} className="text-red-500 mx-auto mb-4" />
-                <h3 className="text-xl font-black text-slate-800 m-0">¿Borrar?</h3>
-                <p className="text-slate-500 text-sm mt-2 font-medium">Se eliminará {meds[deletingMed]?.nombre}</p>
+                <h3 className="text-xl font-black text-slate-800 m-0">¿Eliminar de la lista?</h3>
+                <p className="text-slate-500 text-sm mt-2 font-medium">{meds[deletingMed]?.nombre}</p>
                 <div className="flex gap-3 mt-6">
-                   <button onClick={eliminarMedicamento} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-black text-sm shadow-lg">Eliminar</button>
-                   <button onClick={() => setDeletingMed(null)} className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-black text-sm">Cancelar</button>
+                   <button onClick={eliminarMedicamento} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-black text-sm shadow-lg border-none cursor-pointer">Eliminar</button>
+                   <button onClick={() => setDeletingMed(null)} className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-black text-sm border-none cursor-pointer">Cancelar</button>
                 </div>
              </div>
           </div>
