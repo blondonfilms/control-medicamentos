@@ -47,12 +47,12 @@ import {
  * ⚠️ CONFIGURACIÓN DE FIREBASE ⚠️
  */
 const firebaseConfig = {
-  apiKey: "",         
-  authDomain: "",     
-  projectId: "",      
-  storageBucket: "",  
-  messagingSenderId: "", 
-  appId: ""           
+  apiKey: "AIzaSyAiVjwE4HzqwT5OKLP-aiJCNEm5mGkxUGM",         
+  authDomain: "control-medicamentos-9c9f9.firebaseapp.com",     
+  projectId: "control-medicamentos-9c9f9",      
+  storageBucket: "control-medicamentos-9c9f9.firebasestorage.app",  
+  messagingSenderId: "805972069626", 
+  appId: "1:805972069626:web:287622c95615b852070d43"           
 };
 
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'control-medicamentos-9c9f9';
